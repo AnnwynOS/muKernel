@@ -1,46 +1,18 @@
 #![no_std]
 #![no_main]
 
-use bootloader_api::{entry_point, BootInfo, BootloaderConfig};
-use bootloader_api::config::Mapping;
+use bootloader_api::{entry_point, BootInfo};
 
-pub static BOOTLOADER_CONFIG: BootloaderConfig = {
-    let mut config = BootloaderConfig::new_default();
-    config.mappings.physical_memory = Some(Mapping::Dynamic);
-    config
-};
+use kernel::debug::log::Logger;
+use kernel::arch::x86_64::halt::halt_loop;
 
-entry_point!(kernel_main, config = &BOOTLOADER_CONFIG);
+entry_point!(kernel_main);
 
-fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
-    if let Some(fb) = boot_info.framebuffer.as_mut() {
-        let info = fb.info();
-        let buf  = fb.buffer_mut();
+fn kernel_main(_boot_info: &'static mut BootInfo) -> ! {
+    Logger::init();
 
-        for chunk in buf.chunks_mut(info.bytes_per_pixel) {
-            if chunk.len() >= 3 {
-                chunk[0] = 0xCC; // B
-                chunk[1] = 0x44; // G
-                chunk[2] = 0x00; // R
-            }
-            if chunk.len() >= 4 {
-                chunk[3] = 0xFF; // A
-            }
-        }
-    }
+    Logger::log("Kernel booting...");
+    Logger::log("Debug system online");
 
-    loop {
-        x86_hlt();
-    }
-}
-#[inline(always)]
-fn x86_hlt() {
-    unsafe { core::arch::asm!("hlt", options(nomem, nostack, preserves_flags)) }
-}
-
-#[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
-    loop {
-        x86_hlt();
-    }
+    halt_loop();
 }
