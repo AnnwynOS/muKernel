@@ -1,10 +1,7 @@
-//! Capability system
-//! Pas d'accès implicite; 1 ressource implique une capabilité
-
 use spin::Mutex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CapabilityId(u64);
+pub struct CapabilityId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rights(pub u32);
@@ -45,7 +42,7 @@ struct Entry {
     rights: Rights,
     delegation_depth: u8,
     revoked: bool,
-    used: bool,   // distingue slot occupé de l'id à 0
+    used: bool,
 }
 
 impl Entry {
@@ -61,7 +58,6 @@ impl Entry {
     }
 }
 
-// 64 capabilities simultanées max ; àpp3 KB en BSS, zéro stack usage
 const MAX_CAPS: usize = 64;
 
 struct Table {
@@ -75,7 +71,7 @@ impl Table {
         Self {
             entries: [Entry::empty(); MAX_CAPS],
             next_id: 1,
-            count:   0,
+            count: 0,
         }
     }
 

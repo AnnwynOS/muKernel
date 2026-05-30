@@ -26,6 +26,10 @@ pub fn phys_to_virt(phys: u64) -> VirtAddr {
     VirtAddr::new(unsafe { PHYSICAL_MEMORY_OFFSET } + phys)
 }
 
+pub fn physical_memory_offset() -> u64 {
+    unsafe{ PHYSICAL_MEMORY_OFFSET }
+}
+
 pub fn init(boot_info: &BootInfo) {
     Logger::log("≺VMM≻ Checking physical_memory_offset...");
 
@@ -33,8 +37,7 @@ pub fn init(boot_info: &BootInfo) {
         Some(o) => o,
         None => {
             // Le bootloader n'a pas mappé toute la mémoire physique, on continue sans VMM, le PMM suffira. Mapping de pages recquiert alors l'offseft.
-            Logger::log("≺VMM≻ WARNING: physical_memory_offset not provided");
-            Logger::log("≺VMM≻ Skipping offset mapping ; add to bootloader config");
+            Logger::log("≺VMM≻ WARNING: offset not provided");
             return;
         }
     };

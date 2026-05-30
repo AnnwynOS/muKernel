@@ -18,8 +18,6 @@ static mut CPU_STACKS: CpuStacks = CpuStacks {
 
 pub static mut TSS: TaskStateSegment = TaskStateSegment::new();
 
-/// Appelé une seule fois, avant tout accès concurrent
-/// Initialisation du tss avec les addr des piles, AVANT LE GDT InIT
 pub unsafe fn init() {
     TSS.privilege_stack_table[0] =
         CPU_STACKS.kernel.top();
@@ -27,4 +25,8 @@ pub unsafe fn init() {
         CPU_STACKS.double_fault.top();
     TSS.interrupt_stack_table[NMI_IST_INDEX as usize] =
         CPU_STACKS.nmi.top();
+}
+
+pub fn kernel_stack_top() -> u64 {
+    unsafe { CPU_STACKS.kernel.top().as_u64() }
 }

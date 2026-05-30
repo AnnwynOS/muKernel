@@ -9,3 +9,5 @@ pub mod ipc;
 pub mod mm;
 pub mod panic;
 pub mod scheduler;
+pub mod process;
+pub mod syscall;

@@ -34,6 +34,16 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     kernel::arch::x86_64::interrupts::init();
     Logger::log("≺BOOT≻ Interrupts OK");
 
+    Logger::log("≺BOOT≻ Starting percpu...");
+    unsafe {
+        kernel::arch::x86_64::cpu::percpu::init(kernel::arch::x86_64::cpu::tss::kernel_stack_top());
+    }
+    Logger::log("≺BOOT≻ percpu OK...");
+
+    Logger::log("≺BOOT≻ Starting syscalls...");
+    unsafe { kernel::syscall::init(); }
+    Logger::log("≺BOOT≻ Syscalls OK...");
+
     Logger::log("≺BOOT≻ Running self-tests...");
     self_test();
 
@@ -76,6 +86,10 @@ fn self_test() {
     capabilities::revoke(id);
     assert!(!capabilities::check(id, Rights::READ));
     assert!(ipc::create_endpoint().is_some());
+
+    let pid = kernel::process::create("test-proc");
+    assert!(pid.is_some());
+    Logger::log("≺SELFTEST≻ Process isolation OK");
 
     Logger::log("≺SELFTEST≻ OK");
 }

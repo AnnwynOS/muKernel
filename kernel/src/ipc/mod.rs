@@ -2,7 +2,7 @@ use spin::Mutex;
 use crate::capabilities::{self, CapabilityId, CapabilityKind, Rights};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EndpointId(u64);
+pub struct EndpointId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
