@@ -1,8 +1,9 @@
 use x86_64::{
     structures::paging::{
         FrameAllocator, Mapper, OffsetPageTable, Page, PageTable,
-        PageTableFlags, PhysFrame, Size4KiB,
+        PageTableFlags, PhysFrame, Size4KiB
     },
+    structures::paging::page_table::PageTableEntry,
     PhysAddr, VirtAddr,
 };
 
@@ -47,8 +48,11 @@ impl Process {
             (*l4_table).zero();
 
             let current_l4 = current_l4_table();
-            for i in 256..512 {
-                (&mut *l4_table)[i] = (&*current_l4)[i].clone();
+            let src_base = current_l4 as *const PageTableEntry;
+            let dst_base = l4_table   as *mut   PageTableEntry;
+            for i in 0..512usize {
+                let entry = core::ptr::read(src_base.add(i));
+                core::ptr::write(dst_base.add(i), entry);
             }
         }
 
@@ -199,4 +203,11 @@ pub unsafe fn activate(pid: ProcessId) {
     if let Some(proc) = table.get_mut(pid) {
         proc.activate();
     }
+}
+
+pub fn get_cr3(pid: ProcessId) -> Option<u64> {
+    let table = PROCESSES.lock();
+    table.procs.iter().flatten()
+        .find(|p| p.id == pid)
+        .map(|p| p.cr3.as_u64())
 }

@@ -54,6 +54,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     scheduler::spawn("idle",    PriorityClass::Background,  task_idle);
     scheduler::spawn("worker",  PriorityClass::Productive,  task_worker);
 
+    Logger::log("≺BOOT≻ Starting userspace...");
+    kernel::userspace::launch_first_userspace();
+    Logger::log("≺BOOT≻ Userspace OK...");
+
     Logger::log("≺BOOT≻ Starting scheduler...");
     scheduler::start();
 

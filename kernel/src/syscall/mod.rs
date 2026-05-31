@@ -1,4 +1,4 @@
-use x86_64::registers::model_specific::{Msr, Star, LStar, SFMask};
+use x86_64::registers::model_specific::{Star, LStar, SFMask};
 use x86_64::registers::rflags::RFlags;
 use x86_64::VirtAddr;
 use crate::debug::log::Logger;
@@ -21,7 +21,7 @@ pub unsafe fn init() {
         x86_64::structures::gdt::SegmentSelector::new(2, x86_64::PrivilegeLevel::Ring0),
     ).expect("STAR write failed");
 
-    LStar::write(VirtAddr::new(syscall_handler_naked as *const () as u64));
+    LStar::write(VirtAddr::new(syscall_entry as *const () as u64));
 
     SFMask::write(RFlags::INTERRUPT_FLAG);
 
@@ -34,7 +34,7 @@ pub unsafe fn init() {
 }
 
 #[unsafe(naked)]
-unsafe extern "C" fn syscall_handler_naked() {
+unsafe extern "C" fn syscall_entry() {
     core::arch::naked_asm!(
         "swapgs",
         "mov gs:[0], rsp",
@@ -42,24 +42,20 @@ unsafe extern "C" fn syscall_handler_naked() {
 
         "push rcx",
         "push r11",
-        "push rbp",
-        "push r12",
-        "push r13",
-        "push r14",
-        "push r15",
 
         "sti",
 
-        "mov rcx, r10",
+        "mov r9, r8",
+        "mov r8, r10",
+        "mov rcx, rdx",
+        "mov rdx, rsi",
+        "mov rsi, rdi",
+        "mov rdi, rax",
+
         "call {dispatcher}",
 
         "cli",
 
-        "pop r15",
-        "pop r14",
-        "pop r13",
-        "pop r12",
-        "pop rbp",
         "pop r11", 
         "pop rcx", 
 
@@ -75,17 +71,14 @@ unsafe extern "C" fn syscall_handler_naked() {
 }
 
 unsafe extern "C" fn syscall_dispatcher(
+    nr: u64,
     arg1: u64,
     arg2: u64,
     arg3: u64,
     arg4: u64,
     arg5: u64,
-    _arg6: u64,
 ) -> i64 {
-    let syscall_nr: u64;
-    core::arch::asm!("", out("rax") syscall_nr);
-
-    match syscall_nr {
+    match nr {
         SYS_LOG => sys_log(arg1, arg2),
         SYS_YIELD => sys_yield(),
         SYS_EXIT => sys_exit(arg1),
@@ -111,7 +104,7 @@ fn sys_yield() -> i64 {
     0
 }
 
-fn sys_exit(code: u64) -> i64 {
+fn sys_exit(code: u64) -> ! {
     Logger::log("≺SYSCALL≻ SYS_EXIT");
     // TODO : marquer le processus comme Zombiepuis  nettoyer les ressources
     crate::arch::x86_64::halt::halt_loop();

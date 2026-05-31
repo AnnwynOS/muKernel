@@ -11,3 +11,4 @@ pub mod panic;
 pub mod scheduler;
 pub mod process;
 pub mod syscall;
+pub mod userspace;
