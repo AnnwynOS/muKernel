@@ -1,3 +1,4 @@
+use core::fmt::Alignment::Right;
 use spin::Mutex;
 use crate::capabilities::{self, CapabilityId, CapabilityKind, Rights};
 
@@ -25,6 +26,14 @@ impl Message {
     pub const fn empty(kind: MessageKind, sender: u64) -> Self {
         Self { kind, sender, data: [0; 48], data_len: 0 }
     }
+
+    pub fn with_data(kind: MessageKind, sender: u64, src: &[u8]) -> Self {
+        let mut m = Self::empty(kind, sender);
+        let n = src.len().min(48);
+        m.data[..n].copy_from_slice(&src[..n]);
+        m.data_len = n as u8;
+        m
+    }
 }
 
 const QUEUE_DEPTH: usize = 16;
@@ -37,6 +46,7 @@ struct Queue {
     head: usize,
     tail: usize,
     count: usize,
+    owner: u64
 }
 
 impl Queue {
@@ -48,6 +58,7 @@ impl Queue {
             head: 0,
             tail: 0,
             count: 0,
+            owner: 0,
         }
     }
 
@@ -86,11 +97,12 @@ impl Registry {
         }
     }
 
-    fn create(&mut self) -> Option<EndpointId> {
+    fn create(&mut self, owner: u64) -> Option<EndpointId> {
         for q in self.queues.iter_mut() {
             if !q.used {
                 q.id = self.next_id;
                 q.used = true;
+                q.owner = owner;
                 self.next_id += 1;
                 return Some(EndpointId(q.id));
             }
@@ -100,6 +112,15 @@ impl Registry {
 
     fn get_mut(&mut self, id: EndpointId) -> Option<&mut Queue> {
         self.queues.iter_mut().find(|q| q.used && q.id == id.0)
+    }
+
+    fn destroy(&mut self, id: EndpointId) {
+        for q in self.queues.iter_mut() {
+            if q.used && q.id == id. 0 {
+                *q = Queue::empty();
+                return;
+            }
+        }
     }
 }
 
@@ -114,7 +135,11 @@ pub enum IpcError {
 }
 
 pub fn create_endpoint() -> Option<(EndpointId, CapabilityId, CapabilityId)> {
-    let id = REGISTRY.lock().create()?;
+    create_endpoint_for(0)
+}
+
+pub fn create_endpoint_for(owner: u64) -> Option<(EndpointId, CapabilityId, CapabilityId)> {
+    let id = REGISTRY.lock().create(owner)?;
     let send_cap = capabilities::create(
         CapabilityKind::IpcEndpoint { endpoint_id: id.0 }, Rights::SEND, 4)?;
     let recv_cap = capabilities::create(
@@ -139,4 +164,13 @@ pub fn recv(cap: CapabilityId, endpoint: EndpointId) -> Result<Message, IpcError
         .ok_or(IpcError::InvalidEndpoint)?
         .pop()
         .ok_or(IpcError::WouldBlock)
+}
+
+pub fn destroy(cap: CapabilityId, endpoint: EndpointId) -> Result<(), IpcError> {
+    if !capabilities::check(cap, Rights::REVOKE) {
+        return Err(IpcError::PermissionDenied);
+    }
+    REGISTRY.lock().destroy(endpoint);
+    capabilities::revoke(cap);
+    Ok(())
 }

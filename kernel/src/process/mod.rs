@@ -9,6 +9,7 @@ use x86_64::{
 
 use crate::mm::pmm;
 use crate::mm::vmm;
+use crate::capabilities::Table;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProcessId(pub u32);
@@ -32,6 +33,7 @@ pub struct Process {
     pub cr3:   PhysAddr,
 
     l4_table:  *mut PageTable,
+    pub cap_table: Table,
 }
 
 unsafe impl Send for Process {}
@@ -62,6 +64,7 @@ impl Process {
             name,
             cr3: l4_phys,
             l4_table,
+            cap_table: Table::new(id.0 as u64),
         })
     }
 

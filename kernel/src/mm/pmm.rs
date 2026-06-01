@@ -3,7 +3,7 @@ use spin::Mutex;
 use crate::debug::log::Logger;
 
 const PAGE_SIZE:  u64   = 4096;
-const MAX_FRAMES: usize = 512 * 1024; // 16 GB
+const MAX_FRAMES: usize = 512 * 1024; // 2 GB
 const BITMAP_LEN: usize = MAX_FRAMES / 64;
 
 struct Pmm {
