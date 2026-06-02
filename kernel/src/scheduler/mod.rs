@@ -1,6 +1,7 @@
 pub mod context;
 pub mod task;
 pub mod switch;
+pub mod current;
 
 use spin::Mutex;
 use task::{Task, TaskId, TaskState, PriorityClass, TaskStack};
@@ -152,4 +153,10 @@ pub unsafe fn on_tick() -> Option<(*mut TaskContext, *const TaskContext)> {
 
     drop(s);
     Some((old_ctx, new_ctx))
+}
+
+pub fn current_task_id() -> Option<task::TaskId> {
+    let s = SCHED.try_lock()?;
+    if !s.started { return None; }
+    s.tasks[s.current].as_ref().map(|t| t.id)
 }

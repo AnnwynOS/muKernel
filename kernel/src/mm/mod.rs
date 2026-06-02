@@ -1,5 +1,6 @@
 pub mod pmm;
 pub mod vmm;
+pub mod user_ptr;
 
 use bootloader_api::info::BootInfo;
 use crate::debug::log::Logger;

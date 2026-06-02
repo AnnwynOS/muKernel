@@ -174,3 +174,20 @@ pub fn destroy(cap: CapabilityId, endpoint: EndpointId) -> Result<(), IpcError> 
     capabilities::revoke(cap);
     Ok(())
 }
+
+pub fn send_unchecked(endpoint: EndpointId, msg: Message,) -> Result<(), IpcError> {
+    let mut reg = REGISTRY.lock();
+    reg.get_mut(endpoint)
+        .ok_or(IpcError::InvalidEndpoint)?
+        .push(msg)
+        .then_some(())
+        .ok_or(IpcError::QueueFull)
+}
+
+pub fn recv_unchecked(endpoint: EndpointId) -> Result<Message, IpcError> {
+    let mut reg = REGISTRY.lock();
+    reg.get_mut(endpoint)
+        .ok_or(IpcError::InvalidEndpoint)?
+        .pop()
+        .ok_or(IpcError::WouldBlock)
+}

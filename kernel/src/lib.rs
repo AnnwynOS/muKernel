@@ -12,3 +12,4 @@ pub mod scheduler;
 pub mod process;
 pub mod syscall;
 pub mod userspace;
+pub mod loader;

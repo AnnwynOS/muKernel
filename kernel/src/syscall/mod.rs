@@ -2,6 +2,8 @@ use x86_64::registers::model_specific::{Star, LStar, SFMask};
 use x86_64::registers::rflags::RFlags;
 use x86_64::VirtAddr;
 use crate::debug::log::Logger;
+use crate::ipc;
+use crate::mm::user_ptr;
 
 pub const SYS_LOG: u64 = 0;
 pub const SYS_YIELD: u64 = 1;
@@ -11,6 +13,7 @@ pub const SYS_IPC_RECV: u64 = 4;
 pub const SYS_CAP_CREATE: u64 = 5;
 pub const SYS_CAP_REVOKE: u64 = 6;
 pub const SYS_MEM_MAP: u64 = 7;
+pub const SYS_ENDPOINT_CREATE: u64 = 8;
 
 pub unsafe fn init() {
     Logger::log("≺SYSCALL≻ Initializing...");
@@ -83,20 +86,25 @@ unsafe extern "C" fn syscall_dispatcher(
         SYS_YIELD => sys_yield(),
         SYS_EXIT => sys_exit(arg1),
         SYS_IPC_SEND => sys_ipc_send(arg1, arg2, arg3),
-        SYS_IPC_RECV => sys_ipc_recv(arg1, arg2),
+        SYS_IPC_RECV => sys_ipc_recv(arg1, arg2, arg3, arg4),
         SYS_CAP_REVOKE => sys_cap_revoke(arg1),
+        SYS_ENDPOINT_CREATE => sys_endpoint_create(arg1),
         _ => -1, // ENOSYS
     }
 }
 
 unsafe fn sys_log(ptr: u64, len: u64) -> i64 {
     let len = len.min(256) as usize;
-    // TODO : valider que [ptr, ptr+len) est dans l'espace user
-    let slice = core::slice::from_raw_parts(ptr as *const u8, len);
+
+    let slice = match user_ptr::validate_user_str(ptr, len.min(256)) {
+        Ok(s) => s,
+        Err(_) => return -14,
+    };
+
     for &b in slice {
         crate::debug::serial::Serial::write_byte(b);
     }
-    len as i64
+    slice.len() as i64
 }
 
 fn sys_yield() -> i64 {
@@ -110,36 +118,71 @@ fn sys_exit(code: u64) -> ! {
     crate::arch::x86_64::halt::halt_loop();
 }
 
-unsafe fn sys_ipc_send(cap_id: u64, endpoint_id: u64, data_ptr: u64) -> i64 {
+unsafe fn sys_ipc_send(data_ptr: u64, endpoint_id: u64, data_len: u64) -> i64 {
     use crate::capabilities::CapabilityId;
     use crate::ipc::{self, EndpointId, Message, MessageKind};
 
-    let cap = CapabilityId(cap_id);
-    let ep  = EndpointId(endpoint_id);
-    let msg = Message::empty(MessageKind::Request, 0); // TODO : copier data_ptr
+    let len = data_len as usize;
 
-    match ipc::send(cap, ep, msg) {
+    let data_slice = if len > 0 {
+        match user_ptr::validate_user_str(data_ptr, len.min(48)) {
+            Ok(s) => s,
+            Err(_) => return -14,
+        }
+    } else {
+        &[]
+    };
+
+    let ep  = EndpointId(endpoint_id);
+    let msg = Message::with_data(MessageKind::Request, 0, data_slice);
+
+    match ipc::send_unchecked(ep, msg) {
         Ok(()) => 0,
         Err(_) => -1,
     }
 }
 
-fn sys_ipc_recv(cap_id: u64, endpoint_id: u64) -> i64 {
+fn sys_ipc_recv(buf_ptr: u64, endpoint_id: u64, buf_len: u64, out_len_ptr: u64) -> i64 {
     use crate::capabilities::CapabilityId;
     use crate::ipc::{self, EndpointId};
 
-    let cap = CapabilityId(cap_id);
+    let len = buf_len as usize;
+    if len > 0 {
+        if user_ptr::validate_user_write(buf_ptr, len.min(48)).is_err() {
+            return -14;
+        }
+    }
+
     let ep  = EndpointId(endpoint_id);
 
-    match ipc::recv(cap, ep) {
-        Ok(_msg) => 0,
-        Err(_)   => -1,
+    match ipc::recv_unchecked(ep) {
+        Ok(msg) => {
+            let copy_len = (msg.data_len as usize).min(len);
+            if copy_len > 0 {
+                unsafe { core::ptr::copy_nonoverlapping(msg.data.as_ptr(), buf_ptr as *mut u8, copy_len); }
+            }
+            if out_len_ptr != 0 {
+                if user_ptr::validate_user_write(out_len_ptr, 4).is_ok() {
+                    unsafe { core::ptr::write_unaligned(out_len_ptr as *mut u32, copy_len as u32); }
+                }
+            }
+            0
+        },
+        Err(_)   => -11,
     }
 }
 
 fn sys_cap_revoke(cap_id: u64) -> i64 {
     use crate::capabilities::{self, CapabilityId};
     if capabilities::revoke(CapabilityId(cap_id)) { 0 } else { -1 }
+}
+
+fn sys_endpoint_create(_flags: u64)-> i64 {
+    use crate::ipc;
+    match ipc::create_endpoint() {
+        Some((ep, _send, _recv)) => ep.0 as i64,
+        None => -12,
+    }
 }
 
 unsafe fn sys_mem_map(_base: u64, _len: u64, _flags: u64) -> i64 { -1 }

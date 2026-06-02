@@ -214,3 +214,14 @@ pub fn get_cr3(pid: ProcessId) -> Option<u64> {
         .find(|p| p.id == pid)
         .map(|p| p.cr3.as_u64())
 }
+
+pub fn map_frame(
+    pid: ProcessId,
+    virt: VirtAddr,
+    phys: x86_64::PhysAddr,
+    flags: PageTableFlags,
+) -> Result<(), &'static str> {
+    let mut table = PROCESSES.lock();
+    let proc = table.get_mut(pid).ok_or("process not found")?;
+    proc.map_user_page(virt, phys, flags)
+}
