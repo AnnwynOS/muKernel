@@ -160,3 +160,43 @@ pub fn current_task_id() -> Option<task::TaskId> {
     if !s.started { return None; }
     s.tasks[s.current].as_ref().map(|t| t.id)
 }
+
+pub fn mark_dead_and_pick_next() -> Option<(*mut TaskContext, *const TaskContext)> {
+    let mut s = SCHED.try_lock()?;
+
+    let cur = s.current;
+    if let Some(t) = &mut s.tasks[cur] {
+        t.state = TaskState::Dead;
+    }
+
+    let next = s.pick_next();
+
+    if next == cur {
+        for i in 0..MAX_TASKS {
+            if let Some(t) = &s.tasks[i] {
+                if t.state == TaskState::Ready {
+                    if let Some(t) = &mut s.tasks[i] {
+                        t.state = TaskState::Running;
+                    }
+                    s.current = i;
+                    let old_ctx = &mut s.tasks[cur].as_mut()?.context as *mut TaskContext;
+                    let new_ctx = & s.tasks[i].as_ref()?.context as *const TaskContext;
+                    drop(s);
+                    return Some((old_ctx, new_ctx));
+                }
+            }
+        }
+        return None;
+    }
+
+    if let Some(t) = &mut s.tasks[next] {
+        t.state = TaskState::Running;
+    }
+    s.current = next;
+
+    let old_ctx = &mut s.tasks[cur].as_mut()?.context as *mut TaskContext;
+    let new_ctx = & s.tasks[next].as_ref()?.context as *const TaskContext;
+
+    drop(s);
+    Some((old_ctx, new_ctx))
+}

@@ -116,7 +116,67 @@ impl Process {
 
 impl Drop for Process {
     fn drop(&mut self) {
-        // TODO : libérer récursivement toutes les frames allouées
+        unsafe {
+            self.free_page_tables();
+        }
+    }
+}
+
+impl Process {
+    unsafe fn free_page_tables(&mut self) {
+        use x86_64::structures::paging::page_table::PageTableEntry;
+
+        let l4_table = &mut *self.l4_table;
+        for l4_idx in 0..256 {
+            let l4_entry = &l4_table[l4_idx];
+            if !l4_entry.flags().contains(PageTableFlags::PRESENT) {
+                continue;
+            }
+
+            let l3_phys = l4_entry.addr().as_u64();
+            let l3_virt = vmm::phys_to_virt(l3_phys);
+            let l3_table = &mut *(l3_virt.as_mut_ptr::<PageTable>());
+
+            for l3_idx in 0..512 {
+                let l3_entry = &l3_table[l3_idx];
+                if !l3_entry.flags().contains(PageTableFlags::PRESENT) {
+                    continue;
+                }
+
+                let l2_phys = l3_entry.addr().as_u64();
+                let l2_virt = vmm::phys_to_virt(l2_phys);
+                let l2_table = &mut *(l2_virt.as_mut_ptr::<PageTable>());
+
+                for l2_idx in 0..512 {
+                    let l2_entry = &l2_table[l2_idx];
+                    if !l2_entry.flags().contains(PageTableFlags::PRESENT) {
+                        continue;
+                    }
+
+                    let l1_phys = l2_entry.addr().as_u64();
+                    let l1_virt = vmm::phys_to_virt(l1_phys);
+                    let l1_table = &mut *(l1_virt.as_mut_ptr::<PageTable>());
+
+                    for l1_idx in 0..512 {
+                        let l1_entry = &l1_table[l1_idx];
+                        if !l1_entry.flags().contains(PageTableFlags::PRESENT) {
+                            continue;
+                        }
+
+                        let page_phys = l1_entry.addr().as_u64();
+                        pmm::free_frame(page_phys);
+                    }
+
+                    pmm::free_frame(l1_phys);
+                }
+
+                pmm::free_frame(l2_phys);
+            }
+
+            pmm::free_frame(l3_phys);
+        }
+
+        pmm::free_frame(self.cr3.as_u64());
     }
 }
 
@@ -224,4 +284,17 @@ pub fn map_frame(
     let mut table = PROCESSES.lock();
     let proc = table.get_mut(pid).ok_or("process not found")?;
     proc.map_user_page(virt, phys, flags)
+}
+
+pub fn mark_exit(pid: ProcessId) -> bool {
+    let mut table = PROCESSES.lock();
+    for slot in table.procs.iter_mut() {
+        if let Some(proc) = slot {
+            if proc.id == pid {
+                let _ = slot.take();
+                return true;
+            }
+        }
+    }
+    false
 }
