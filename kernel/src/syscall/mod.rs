@@ -114,18 +114,23 @@ fn sys_yield() -> i64 {
 
 fn sys_exit(code: u64) -> ! {
     Logger::log("≺SYSCALL≻ SYS_EXIT");
-    // TODO : marquer le processus comme Zombiepuis  nettoyer les ressources
+
+    if let Some(pid) = crate::scheduler::current::current_process() {
+        crate::process::mark_exit(pid);
+    }
+
     crate::arch::x86_64::halt::halt_loop();
 }
 
-unsafe fn sys_ipc_send(data_ptr: u64, endpoint_id: u64, data_len: u64) -> i64 {
+unsafe fn sys_ipc_send(cap_id: u64, endpoint_id: u64, data_ptr: u64) -> i64 {
     use crate::capabilities::CapabilityId;
     use crate::ipc::{self, EndpointId, Message, MessageKind};
 
-    let len = data_len as usize;
+    let cap = CapabilityId(cap_id);
+    let ep  = EndpointId(endpoint_id);
 
-    let data_slice = if len > 0 {
-        match user_ptr::validate_user_str(data_ptr, len.min(48)) {
+    let data_slice: &[u8] = if data_ptr != 0 {
+        match user_ptr::validate_user_str(data_ptr, 48) {
             Ok(s) => s,
             Err(_) => return -14,
         }
@@ -133,12 +138,16 @@ unsafe fn sys_ipc_send(data_ptr: u64, endpoint_id: u64, data_len: u64) -> i64 {
         &[]
     };
 
-    let ep  = EndpointId(endpoint_id);
-    let msg = Message::with_data(MessageKind::Request, 0, data_slice);
+    let sender = crate::scheduler::current::current_process()
+        .map(|p| p.0 as u64)
+        .unwrap_or(0);
 
-    match ipc::send_unchecked(ep, msg) {
+    let msg = Message::with_data(MessageKind::Request, sender, data_slice);
+
+    match ipc::send(cap, ep, msg) {
         Ok(()) => 0,
-        Err(_) => -1,
+        Err(ipc::IpcError::PermissionDenied) => -1,
+        Err(_) => -11,
     }
 }
 

@@ -1,4 +1,3 @@
-use core::fmt::Alignment::Right;
 use spin::Mutex;
 use crate::capabilities::{self, CapabilityId, CapabilityKind, Rights};
 
