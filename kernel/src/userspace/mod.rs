@@ -7,11 +7,12 @@ use crate::process::{self, ProcessId, USER_CODE_BASE, USER_STACK_TOP, USER_STACK
 use crate::mm::vmm;
 use crate::scheduler::{self, task::PriorityClass};
 use crate::debug::log::Logger;
+use crate::loader::{self, LoadedBinary};
 
 #[unsafe(naked)]
 #[unsafe(no_mangle)]
 #[link_section = ".user_text"]
-pub unsafe extern "C" fn user_entry() {
+pub unsafe extern "C" fn user_bootstrap() {
     core::arch::naked_asm!(
         "sub rsp, 16",
         "mov byte ptr [rsp+0], 0x55", // U
@@ -32,75 +33,110 @@ pub unsafe extern "C" fn user_entry() {
 #[unsafe(naked)]
 #[unsafe(no_mangle)]
 #[link_section = ".user_text"]
-pub unsafe extern "C" fn user_entry_end() {
+pub unsafe extern "C" fn user_bootstrap_end() {
     core::arch::naked_asm!("nop");
 }
 
-pub fn launch_first_userspace() -> Option<ProcessId> {
-    Logger::log("≺USER≻ Creating process...");
-    let pid = process::create("init")?;
-
-    let code_flags = PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE;
-    process::map_pages(pid, VirtAddr::new(USER_CODE_BASE), 1, code_flags).ok()?;
-    unsafe { copy_code_to_user(pid)?; }
-
-    let stack_flags = PageTableFlags::PRESENT
-        | PageTableFlags::WRITABLE
-        | PageTableFlags::USER_ACCESSIBLE
-        | PageTableFlags::NO_EXECUTE;
-    let stack_base = USER_STACK_TOP - USER_STACK_SIZE;
-    process::map_pages(pid, VirtAddr::new(stack_base),
-                       (USER_STACK_SIZE / 4096) as usize, stack_flags).ok()?;
-
-    unsafe { PENDING_USER_PID = pid.0; }
-    scheduler::spawn("init-trampoline", PriorityClass::Interactive, ring3_trampoline);
-
-    Logger::log("≺USER≻ Process queued");
-    Some(pid)
-}
-
-static mut PENDING_USER_PID: u32 = 0;
-static mut USER_CR3: u64 = 0;
-static mut TSTACK_TOP: u64 = 0;
+static mut PENDING_PID: u32 = 0;
+static mut PENDING_CR3: u64 = 0;
+static mut PENDING_STACK: u64 = 0;
+static mut PENDING_ENTRY: u64 = 0;
 
 #[repr(C, align(16))]
 struct TStack([u8; 8192]);
 static mut TSTACK: TStack = TStack([0u8; 8192]);
+static mut TSTACK_TOP: u64 = 0;
 
-fn ring3_trampoline() -> ! {
-    let pid = ProcessId(unsafe { PENDING_USER_PID });
+pub fn launch_first_userspace() -> Option<ProcessId> {
+    Logger::log("≺USER≻ Creating bootstrap process...");
 
-    let cr3 = process::get_cr3(pid).unwrap();
+    // 1. Créer le processus
+    let pid = process::create("init")?;
 
+    // 2. Construire un ABO minimal à la volée depuis le code bootstrap naked
+    let loaded = unsafe { load_bootstrap_code(pid)? };
+
+    // 3. Stocker les paramètres pour le trampoline
     unsafe {
-        USER_CR3   = cr3;
-        TSTACK_TOP = TSTACK.0.as_ptr() as u64 + 8192;
+        PENDING_PID   = pid.0;
+        PENDING_ENTRY = loaded.entry;
+        PENDING_STACK = loaded.stack_top;
+        PENDING_CR3   = process::get_cr3(pid)?;
+        TSTACK_TOP    = TSTACK.0.as_ptr() as u64 + 8192;
     }
 
-    Logger::log("≺USER≻ Jumping to ring 3...");
+    // 4. Spawner le trampoline kernel
+    if let Some(task_id)  = scheduler::spawn("init-trampoline", PriorityClass::Interactive, trampoline) {
+        crate::scheduler::current::associate(task_id, pid);
+    }
 
-    unsafe { trampoline_naked() }
+    Logger::log("≺USER≻ Bootstrap process queued");
+    Some(pid)
+}
+
+/// Lancer un binaire ABO ou ELF depuis une tranche de mémoire kernel.
+/// Utilisé par le runtime pour charger les services système.
+pub fn launch_from_bytes(
+    name: &'static str,
+    data: &[u8],
+    priority: PriorityClass,
+) -> Option<ProcessId> {
+    let pid = process::create(name)?;
+
+    let loaded = loader::load(pid, data).ok()?;
+
+    unsafe {
+        PENDING_PID   = pid.0;
+        PENDING_ENTRY = loaded.entry;
+        PENDING_STACK = loaded.stack_top;
+        PENDING_CR3   = process::get_cr3(pid)?;
+        TSTACK_TOP    = TSTACK.0.as_ptr() as u64 + 8192;
+    }
+
+    if let Some(task_id)  = scheduler::spawn(name, priority, trampoline) {
+        crate::scheduler::current::associate(task_id, pid);
+    }
+    Some(pid)
+}
+
+// ── Trampoline ring 0 → ring 3 ───────────────────────────────────────────────
+
+fn trampoline() -> ! {
+    let entry  = unsafe { PENDING_ENTRY };
+    let stack  = unsafe { PENDING_STACK };
+    let cr3    = unsafe { PENDING_CR3 };
+
+    Logger::log("≺USER≻ Activating process...");
+
+    unsafe {
+        // Switcher sur la pile statique AVANT de changer cr3
+        // (la pile du scheduler peut ne plus être accessible après)
+        do_switch_and_iretq(cr3, entry, stack)
+    }
 }
 
 #[unsafe(naked)]
-unsafe extern "C" fn trampoline_naked() -> ! {
+unsafe extern "C" fn do_switch_and_iretq(cr3: u64, entry: u64, stack: u64) -> ! {
     core::arch::naked_asm!(
+        // rdi = cr3, rsi = entry, rdx = stack
+
+        // 1. Charger la pile statique
         "mov rsp, [{tstack_top}]",
 
-        "mov rax, [{user_cr3}]",
-        "mov cr3, rax",
+        // 2. Changer cr3
+        "mov cr3, rdi",
 
-        "mov rax, 0x1b",
+        // 3. Construire le frame iretq
+        "mov rax, 0x1b",    // SS : user data ring 3
         "push rax",
-        "mov rax, {ustack}",
+        "push rdx",         // RSP user
+        "mov rax, 0x202",   // RFLAGS : IF=1, bit1=1
         "push rax",
-        "mov rax, 0x202",
+        "mov rax, 0x23",    // CS : user code ring 3
         "push rax",
-        "mov rax, 0x23",
-        "push rax",
-        "mov rax, {entry}",
-        "push rax",
+        "push rsi",         // RIP : entry point
 
+        // 4. Zéroïser les registres
         "xor rax, rax",
         "xor rbx, rbx",
         "xor rcx, rcx",
@@ -120,38 +156,71 @@ unsafe extern "C" fn trampoline_naked() -> ! {
         "iretq",
 
         tstack_top = sym TSTACK_TOP,
-        user_cr3   = sym USER_CR3,
-        entry      = const USER_CODE_BASE,
-        ustack     = const USER_STACK_TOP - 16,
+    )
+}
+
+// ── Chargement du code bootstrap ─────────────────────────────────────────────
+
+unsafe fn load_bootstrap_code(pid: ProcessId) -> Option<LoadedBinary> {
+    use crate::mm::{pmm, vmm};
+    use crate::loader::abo;
+
+    let src_start = user_bootstrap     as *const u8;
+    let src_end   = user_bootstrap_end as *const u8;
+    let code_size = (src_end as usize)
+        .saturating_sub(src_start as usize)
+        .max(64)
+        .min(4096);
+
+    // Construire un ABO minimal en mémoire :
+    //   header (64 bytes) + segment_entry (32 bytes) + code
+    let seg_offset = (abo::ABO_HEADER_SIZE + 32) as u64;
+    let total_size = seg_offset as usize + code_size;
+
+    // Allouer un buffer temporaire sur la pile kernel (max 4 KiB + header)
+    // On utilise une frame PMM comme buffer temporaire
+    let buf_phys = pmm::alloc_frame()?;
+    let buf_virt = vmm::phys_to_virt(buf_phys);
+    let buf = core::slice::from_raw_parts_mut(buf_virt.as_mut_ptr::<u8>(), 4096);
+
+    // Zéroïser
+    core::ptr::write_bytes(buf.as_mut_ptr(), 0, 4096);
+
+    // Header ABO
+    let hdr = abo::build_header(
+        [0x41,0x73,0x74,0x65,0x72,0x49,0x6e,0x69, // "AsterIni"
+            0x74,0x00,0x00,0x00,0x00,0x00,0x00,0x00], // "t\0\0..."
+        abo::ABO_FLAG_NATIVE,
+        0, 0,                                        // pas de manifest
+        abo::ABO_HEADER_SIZE as u32,                 // segments juste après le header
+        1,                                           // 1 segment
+        0,                                           // entry à offset 0 du segment
     );
-}
+    buf[..abo::ABO_HEADER_SIZE].copy_from_slice(&hdr);
 
-unsafe fn copy_code_to_user(pid: ProcessId) -> Option<()> {
-    let src_start = user_entry as *const u8;
-    let src_end = user_entry_end as *const u8;
-    let size = (src_end as usize).saturating_sub(src_start as usize).max(64).min(4096);
-    let phys = walk_page(pid, USER_CODE_BASE)?;
-    let dst= vmm::phys_to_virt(phys).as_mut_ptr::<u8>();
-    core::ptr::copy_nonoverlapping(src_start, dst, size);
-    Logger::log("≺USER≻ Code copied");
-    Some(())
-}
+    // Descripteur de segment : code exécutable en lecture seule
+    let seg_entry = abo::build_segment_entry(
+        crate::loader::USER_CODE_BASE,  // vaddr user
+        code_size as u64,               // mem_size
+        seg_offset,                     // file_off (dans le buffer ABO)
+        code_size as u32,               // file_size
+        abo::ABO_SEG_R | abo::ABO_SEG_X,
+    );
+    let seg_off = abo::ABO_HEADER_SIZE;
+    buf[seg_off..seg_off + 32].copy_from_slice(&seg_entry);
 
-unsafe fn walk_page(pid: ProcessId, virt: u64) -> Option<u64> {
-    let cr3_phys = process::get_cr3(pid)?;
-    let virt= VirtAddr::new(virt);
-    macro_rules! next_table {
-        ($entry:expr) => {{
-            let e = $entry;
-            if !e.flags().contains(PageTableFlags::PRESENT) { return None; }
-            &*(vmm::phys_to_virt(e.addr().as_u64()).as_ptr::<PageTable>())
-        }};
-    }
-    let l4 = &*(vmm::phys_to_virt(cr3_phys).as_ptr::<PageTable>());
-    let l3 = next_table!(&l4[virt.p4_index()]);
-    let l2 = next_table!(&l3[virt.p3_index()]);
-    let l1 = next_table!(&l2[virt.p2_index()]);
-    let e = &l1[virt.p1_index()];
-    if !e.flags().contains(PageTableFlags::PRESENT) { return None; }
-    Some(e.addr().as_u64())
+    // Copier le code
+    core::ptr::copy_nonoverlapping(
+        src_start,
+        buf[seg_offset as usize..].as_mut_ptr(),
+        code_size,
+    );
+
+    // Charger via le loader ABO
+    let result = abo::load(pid, &buf[..seg_offset as usize + code_size]);
+
+    // Libérer le buffer temporaire
+    pmm::free_frame(buf_phys);
+
+    result.ok()
 }

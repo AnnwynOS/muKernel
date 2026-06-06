@@ -4,6 +4,7 @@ use x86_64::VirtAddr;
 use crate::debug::log::Logger;
 use crate::ipc;
 use crate::mm::user_ptr;
+use crate::scheduler::current;
 
 pub const SYS_LOG: u64 = 0;
 pub const SYS_YIELD: u64 = 1;
@@ -14,6 +15,7 @@ pub const SYS_CAP_CREATE: u64 = 5;
 pub const SYS_CAP_REVOKE: u64 = 6;
 pub const SYS_MEM_MAP: u64 = 7;
 pub const SYS_ENDPOINT_CREATE: u64 = 8;
+pub const SYS_EXEC: u64 = 9;
 
 pub unsafe fn init() {
     Logger::log("≺SYSCALL≻ Initializing...");
@@ -89,6 +91,7 @@ unsafe extern "C" fn syscall_dispatcher(
         SYS_IPC_RECV => sys_ipc_recv(arg1, arg2, arg3, arg4),
         SYS_CAP_REVOKE => sys_cap_revoke(arg1),
         SYS_ENDPOINT_CREATE => sys_endpoint_create(arg1),
+        SYS_EXEC => sys_endpoint_create(arg1),
         _ => -1, // ENOSYS
     }
 }
@@ -195,3 +198,28 @@ fn sys_endpoint_create(_flags: u64)-> i64 {
 }
 
 unsafe fn sys_mem_map(_base: u64, _len: u64, _flags: u64) -> i64 { -1 }
+
+unsafe fn sys_exec(data_ptr: u64, data_len: u64) -> i64 {
+    use crate::loader;
+    use crate::scheduler::current;
+
+    let len = data_len as usize;
+    if user_ptr::validate_user_read(data_ptr, len).is_err() {
+        return -14;
+    }
+
+    let pid = match current::current_process() {
+        Some(p) => p,
+        None => return -1,
+    };
+
+    let data = core::slice::from_raw_parts(data_ptr as *const u8, len);
+
+    match loader::load(pid, data) {
+        Ok(loaded) => {
+            crate::process::activate_pid(pid);
+            loader::jump_to_userspace(loaded)
+        }
+        Err(_)  => -22,
+    }
+} 

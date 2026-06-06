@@ -298,3 +298,7 @@ pub fn mark_exit(pid: ProcessId) -> bool {
     }
     false
 }
+
+pub fn activate_pid(pid: ProcessId) {
+    unsafe { activate(pid); }
+}
