@@ -1,62 +1,28 @@
-# IdealOS
+# Annwyn µKernel
 
-> Experimental capability-based microkernel operating system written in Rust.
-
-═════════════════════════════════════════════════════════
-
-## ◉ What is IdealOS?
-
-IdealOS is an educational and research-oriented operating system project focused on modern operating system architecture.
-
-The project explores alternative foundations built around:
-
-✓ Capability-based security
-
-✓ Observable and typed IPC
-
-✓ Strict userspace isolation
-
-✓ Transactional system operations
-
-✓ Structured system objects
-
-✓ GPU-first architecture
-
-✓ Distributed-ready runtime services
-
-Rather than modernizing Unix, IdealOS investigates what could come after it.
+> Experimental capability-based microkernel written in Rust.
 
 ═════════════════════════════════════════════════════════
 
-## ◉ Vision
+## ◉ What is the µKernel?
 
-⟦ ***Replacing Historical Constraints*** ⟧
+This repository contains the core microkernel of the Annwyn operating system research project.
 
-```mermaid
-graph LR
-    A1[Files] ---> B1[Objects]
-    A2[Permissions] --> B2[Capabilities]
-    A3[Processes] --> B3[Components]
-    A4[System Calls] --> B4[Messages]
-    A5[Applications] --> B5[Service Graphs]
+Responsibilities include:
 
-classDef ancienneColonne fill:#f5f5f5,stroke:#ccc,stroke-width:1px;
-classDef nouvelleColonne fill:#e1f5fe,stroke:#0288d1,stroke-width:1.5px;
+✓ Thread scheduling
 
-class A1,A2,A3,A4,A5 ancienneColonne;
-class B1,B2,B3,B4,B5 nouvelleColonne;
-```
-The long-term objective is a coherent operating system designed around:
+✓ Memory management
 
-• Observability
+✓ Capability enforcement
 
-• Security
+✓ IPC primitives
 
-• Composability
+✓ Synchronization
 
-• Modern hardware
+✓ Hardware abstraction
 
-• Distributed computing
+Higher-level functionality is implemented in separate repositories.
 
 ═════════════════════════════════════════════════════════
 
@@ -64,23 +30,23 @@ The long-term objective is a coherent operating system designed around:
 
 ⟦ ***Early Development*** ⟧
 
-The current repository primarily contains:
+The current implementation contains:
 
-• Microkernel infrastructure
+• Physical Memory Manager
 
-• Memory management
+• Virtual Memory Manager
 
-• Process management
+• Process abstraction
 
-• Scheduling
+• Scheduler
 
-• Capability systems
+• Capability framework
 
 • IPC foundations
 
 Many components remain experimental and are expected to evolve significantly.
 
-This is currently a research platform rather than a production operating system.
+This repository is currently a research platform rather than a production-ready kernel.
 
 ═════════════════════════════════════════════════════════
 
@@ -103,29 +69,30 @@ This is currently a research platform rather than a production operating system.
 * [ ] SMP support
 * [ ] Typed IPC
 * [ ] Zero-copy IPC
-* [ ] Userspace services
-* [ ] Runtime bootstrap
+* [ ] Improved synchronization
 
 ### Planned
 
-* [ ] Object Store
-* [ ] Transaction Engine
-* [ ] Snapshot System
-* [ ] POSIX Compatibility Layer
-* [ ] WASM Runtime
+* [ ] Userspace bootstrap
+* [ ] Runtime integration
+* [ ] Performance improvements
 
 ═════════════════════════════════════════════════════════
 
 ## ◉ Documentation
 
-If you want to understand the project, start here:
+The global architecture and project philosophy are documented in the `annwyn-docs` repository.
 
-| Document          | Purpose                         |
-| ----------------- | ------------------------------- |
-| `ARCHITECTURE.md` | Long-term architectural vision  |
-| `ROADMAP.md`      | Current implementation roadmap  |
-| `AI_USAGE.md`     | AI usage and project philosophy |
-| `CONTRIBUTING.md` | Contribution guidelines         |
+Useful documents include:
+
+| Document     | Purpose                         |
+| ------------ | ------------------------------- |
+| Architecture | Long-term architectural vision  |
+| Roadmap      | Global implementation roadmap   |
+| AI Usage     | AI usage and project philosophy |
+| Contributing | Contribution guidelines         |
+
+Repository-specific documentation may be found under `docs/`.
 
 ═════════════════════════════════════════════════════════
 
@@ -185,13 +152,31 @@ rust-gdb target/x86_64-kernel/debug/kernel
 
 Contributions, discussions, ideas, criticism, and questions are welcome.
 
-Before contributing, please read:
+Please keep in mind that:
 
-* `ARCHITECTURE.md`
-* `ROADMAP.md`
-* `CONTRIBUTING.md`
+• Architecture consistency is generally more important than feature count.
 
-Architecture consistency is generally more important than feature count.
+• Simplicity is preferred over complexity.
+
+• Unsafe code should be justified.
+
+• Kernel responsibilities should remain minimal.
+
+Before contributing, it is recommended to read the documentation available in `annwyn-docs`.
+
+═════════════════════════════════════════════════════════
+
+## ◉ Related Repositories
+
+• annwyn-docs
+
+• annwyn-runtime
+
+• annwyn-object-store
+
+• annwyn-posix
+
+• annwyn-wasm
 
 ═════════════════════════════════════════════════════════
 
@@ -200,6 +185,7 @@ Architecture consistency is generally more important than feature count.
 Licensed under either of:
 
 * MIT License
+
 * Apache License 2.0
 
 at your option.
