@@ -26,6 +26,7 @@ fn main() {
         "build"         => cmd_build(false),
         "build-release" => cmd_build(true),
         "run"           => cmd_run(false, false),
+        "run-init" => cmd_run_with_init(false),
         "run-release"   => cmd_run(true, false),
         "run-bios"      => cmd_run_bios(false),
         "debug"         => cmd_run(false, true),
@@ -43,7 +44,7 @@ fn main() {
 
 fn print_help() {
     println!("Usage: cargo xtask <task>\n");
-    println!("  build / build-release / run / run-release / run-bios / debug / check / clippy / install-deps");
+    println!("  build / build-release / run / run-init / run-release / run-bios / debug / check / clippy / install-deps");
 }
 
 fn cmd_build(release: bool) {
@@ -69,6 +70,46 @@ fn cmd_run(release: bool, debug_stub: bool) {
     if debug_stub { cmd.args(["-s", "-S"]); }
     run_cmd(&mut cmd);
 }
+
+fn cmd_run_with_init(release: bool) {
+    let kernel_root = workspace_root();
+    let init_abo = kernel_root.join("kernel").join("assets").join("init.abo");
+    if !init_abo.exists() {
+        eprintln!("Error: kernel/assets/init.abo not found.");
+        eprintln!("Generate it with:");
+        eprintln!("cd ../init && make install");
+        std::process::exit(1);
+    }
+    println!("==> init.abo found ({} bytes)", std::fs::metadata(&init_abo).unwrap().len());
+
+    let profile = if release { "release" } else { "debug" };
+    println!("==> Compilation avec embedded-init ({profile})...");
+
+    let target = target_json_path();
+    let mut cmd = Command::new("cargo");
+    cmd.args(["build", "--package", KERNEL_BIN])
+        .args(["--target", &target.to_string_lossy()])
+        .args(["-Z", "build-std=core,compiler_builtins"])
+        .args(["-Z", "build-std-features=compiler-builtins-mem"])
+        .args(["-Z", "json-target-spec"])
+        .args(["--features", "kernel/embedded-init"])
+        .current_dir(workspace_root());
+    if release { cmd.arg("--release"); }
+    run_cmd(&mut cmd);
+
+    let kernel_bin = kernel_bin_path(release);
+    let (uefi_img, bios_img) = image_paths(release);
+    assemble_images(&kernel_bin, &uefi_img, &bios_img);
+
+    println!("==> QEMU avec init.abo embarqué...");
+    let ovmf = find_ovmf();
+    let mut qemu = qemu_base();
+    qemu.args(["-drive", &format!("if=pflash,format=raw,readonly=on,file={}", ovmf)])
+        .args(["-drive", &format!("format=raw,file={}", uefi_img.display())])
+        .args(["-serial", "stdio"]);
+    run_cmd(&mut qemu);
+}
+
 
 fn cmd_run_bios(release: bool) {
     cmd_build(release);

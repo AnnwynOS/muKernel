@@ -16,6 +16,14 @@ static BOOTLOADER_CONFIG: BootloaderConfig = {
     config
 };
 
+#[cfg(not(feature = "embedded-init"))]
+const INIT_ABO: Option<&[u8]> = None;
+
+#[cfg(feature = "embedded-init")]
+const INIT_ABO: Option<&[u8]> = Some(
+    include_bytes!("../assets/init.abo")
+);
+
 entry_point!(kernel_main, config = &BOOTLOADER_CONFIG);
 
 fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
@@ -52,27 +60,35 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     Logger::log("≺BOOT≻ Spawning tasks...");
 
     scheduler::spawn("idle",    PriorityClass::Background,  task_idle);
-    scheduler::spawn("worker",  PriorityClass::Productive,  task_worker);
 
-    Logger::log("≺BOOT≻ Starting userspace...");
-    kernel::userspace::launch_first_userspace();
-    Logger::log("≺BOOT≻ Userspace OK...");
+    match INIT_ABO {
+        Some(abo_bytes) => {
+            Logger::log("≺BOOT≻ Loading init.abo...");
+            kernel::userspace::launch_from_bytes(
+                "init",
+                abo_bytes,
+                PriorityClass::Interactive,
+            );
+            Logger::log("≺BOOT≻ init.abo queued...");
+        }
+        None => {
+            Logger::log("≺BOOT≻ No init.abo found, using bootstrap");
+
+            Logger::log("≺BOOT≻ Starting userspace...");
+            kernel::userspace::launch_first_userspace();
+            Logger::log("≺BOOT≻ Userspace OK...");
+        }
+    }
 
     Logger::log("≺BOOT≻ Starting scheduler...");
     scheduler::start();
+    Logger::log("≺BOOT≻ Scheduler OK...");
 
     Logger::log("≺BOOT≻ Entering idle");
     task_idle()
 }
 
 fn task_idle() -> ! {
-    loop {
-        x86_64::instructions::hlt();
-    }
-}
-
-fn task_worker() -> ! {
-    Logger::log("≺WORKER≻ task_worker started");
     loop {
         x86_64::instructions::hlt();
     }

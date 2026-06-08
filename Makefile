@@ -12,6 +12,9 @@ build-release:
 run:
 	cargo xtask run
 
+run-init:
+	cargo xtask run-init
+
 run-bios:
 	cargo xtask run-bios
 
