@@ -1,5 +1,7 @@
 use spin::Mutex;
 use crate::capabilities::{self, CapabilityId, CapabilityKind, Rights};
+use crate::scheduler;
+use crate::scheduler::task::TaskId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EndpointId(pub u64);
@@ -37,6 +39,8 @@ impl Message {
 
 const QUEUE_DEPTH: usize = 16;
 const MAX_ENDPOINTS: usize = 16;
+const MAX_WAITERS: usize = 4;
+
 
 struct Queue {
     id: u64,
@@ -45,7 +49,8 @@ struct Queue {
     head: usize,
     tail: usize,
     count: usize,
-    owner: u64
+    owner: u64,
+    waiters: [Option<TaskId>; MAX_WAITERS],
 }
 
 impl Queue {
@@ -58,6 +63,7 @@ impl Queue {
             tail: 0,
             count: 0,
             owner: 0,
+            waiters: [None; MAX_WAITERS],
         }
     }
 
@@ -75,6 +81,25 @@ impl Queue {
         self.head = (self.head + 1) % QUEUE_DEPTH;
         self.count -= 1;
         Some(msg)
+    }
+
+    fn add_waiter(&mut self, task: TaskId) -> bool {
+        for slot in self.waiters.iter_mut() {
+            if slot.is_none() {
+                *slot = Some(task);
+                return true;
+            }
+        }
+        false
+    }
+
+    fn pop_waiter(&mut self) -> Option<TaskId> {
+        for slot in self.waiters.iter_mut() {
+            if let Some(id) = slot.take() {
+                return Some(id);
+            }
+        }
+        None
     }
 }
 
@@ -131,6 +156,7 @@ pub enum IpcError {
     InvalidEndpoint,
     QueueFull,
     WouldBlock,
+    TooManyWaiters,
 }
 
 pub fn create_endpoint() -> Option<(EndpointId, CapabilityId, CapabilityId)> {
@@ -148,21 +174,13 @@ pub fn create_endpoint_for(owner: u64) -> Option<(EndpointId, CapabilityId, Capa
 
 pub fn send(cap: CapabilityId, endpoint: EndpointId, msg: Message) -> Result<(), IpcError> {
     if !capabilities::check(cap, Rights::SEND) { return Err(IpcError::PermissionDenied); }
-    let mut reg = REGISTRY.lock();
-    reg.get_mut(endpoint)
-        .ok_or(IpcError::InvalidEndpoint)?
-        .push(msg)
-        .then_some(())
-        .ok_or(IpcError::QueueFull)
+    send_impl(endpoint, msg)
 }
 
 pub fn recv(cap: CapabilityId, endpoint: EndpointId) -> Result<Message, IpcError> {
     if !capabilities::check(cap, Rights::RECEIVE) { return Err(IpcError::PermissionDenied); }
-    let mut reg = REGISTRY.lock();
-    reg.get_mut(endpoint)
-        .ok_or(IpcError::InvalidEndpoint)?
-        .pop()
-        .ok_or(IpcError::WouldBlock)
+
+    recv_unchecked(endpoint)
 }
 
 pub fn destroy(cap: CapabilityId, endpoint: EndpointId) -> Result<(), IpcError> {
@@ -175,12 +193,7 @@ pub fn destroy(cap: CapabilityId, endpoint: EndpointId) -> Result<(), IpcError> 
 }
 
 pub fn send_unchecked(endpoint: EndpointId, msg: Message,) -> Result<(), IpcError> {
-    let mut reg = REGISTRY.lock();
-    reg.get_mut(endpoint)
-        .ok_or(IpcError::InvalidEndpoint)?
-        .push(msg)
-        .then_some(())
-        .ok_or(IpcError::QueueFull)
+    send_impl(endpoint, msg)
 }
 
 pub fn recv_unchecked(endpoint: EndpointId) -> Result<Message, IpcError> {
@@ -189,4 +202,45 @@ pub fn recv_unchecked(endpoint: EndpointId) -> Result<Message, IpcError> {
         .ok_or(IpcError::InvalidEndpoint)?
         .pop()
         .ok_or(IpcError::WouldBlock)
+}
+
+fn send_impl(endpoint: EndpointId, msg: Message) -> Result<(), IpcError> {
+    let waiter = {
+        let mut reg = REGISTRY.lock();
+        let q = reg.get_mut(endpoint).ok_or(IpcError::InvalidEndpoint)?;
+
+        if !q.push(msg) {
+            return Err(IpcError::QueueFull);
+        }
+
+        q.pop_waiter()
+    };
+
+    if let Some(task_id) = waiter {
+        scheduler::unblock(task_id);
+    }
+
+    Ok(())
+}
+
+pub fn recv_blocking(cap: CapabilityId, endpoint: EndpointId) -> Result<Message, IpcError> {
+    if !capabilities::check(cap, Rights::RECEIVE) { return Err(IpcError::PermissionDenied); }
+
+    loop {
+        {
+            let mut reg = REGISTRY.lock();
+            let q = reg.get_mut(endpoint).ok_or(IpcError::InvalidEndpoint)?;
+
+            if let Some(msg) = q.pop() {
+                return Ok(msg);
+            }
+
+            let task_id = scheduler::current_task_id().ok_or(IpcError::WouldBlock)?;
+
+            if !q.add_waiter(task_id) {
+                return Err(IpcError::TooManyWaiters);
+            }
+        }
+        scheduler::block_current();
+    }
 }

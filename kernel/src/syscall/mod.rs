@@ -1,6 +1,7 @@
 use x86_64::registers::model_specific::{Star, LStar, SFMask};
 use x86_64::registers::rflags::RFlags;
 use x86_64::VirtAddr;
+use crate::capabilities::CapabilityId;
 use crate::debug::log::Logger;
 use crate::ipc;
 use crate::mm::user_ptr;
@@ -16,6 +17,7 @@ pub const SYS_CAP_REVOKE: u64 = 6;
 pub const SYS_MEM_MAP: u64 = 7;
 pub const SYS_ENDPOINT_CREATE: u64 = 8;
 pub const SYS_EXEC: u64 = 9;
+pub const SYS_IPC_RECV_BLOCK: u64 = 10;
 
 pub unsafe fn init() {
     Logger::log("≺SYSCALL≻ Initializing...");
@@ -91,7 +93,8 @@ unsafe extern "C" fn syscall_dispatcher(
         SYS_IPC_RECV => sys_ipc_recv(arg1, arg2, arg3, arg4),
         SYS_CAP_REVOKE => sys_cap_revoke(arg1),
         SYS_ENDPOINT_CREATE => sys_endpoint_create(arg1),
-        SYS_EXEC => sys_endpoint_create(arg1),
+        SYS_EXEC => sys_exec(arg1, arg2),
+        SYS_IPC_RECV_BLOCK => sys_ipc_recv_blocking(arg1, arg2, arg3, arg4),
         _ => -1, // ENOSYS
     }
 }
@@ -151,6 +154,33 @@ unsafe fn sys_ipc_send(cap_id: u64, endpoint_id: u64, data_ptr: u64) -> i64 {
         Ok(()) => 0,
         Err(ipc::IpcError::PermissionDenied) => -1,
         Err(_) => -11,
+    }
+}
+
+fn sys_ipc_recv_blocking(cap_id: u64, endpoint_id: u64, buf_ptr: u64, buf_len: u64) -> i64 {
+    use crate::capabilities::CapabilityId;
+    use crate::ipc::{self, EndpointId};
+    
+    let cap = CapabilityId(cap_id);
+    let ep = EndpointId(endpoint_id);
+    let len = buf_len as usize;
+    
+    if len > 0 && user_ptr::validate_user_write(buf_ptr, len.min(48)).is_err() {
+        return -14;
+    }
+    
+    match ipc::recv_blocking(cap,ep) {
+        Ok(msg) => {
+            let copy_len = (msg.data_len as usize).min(len);
+            if copy_len > 0 {
+                unsafe { core::ptr::copy_nonoverlapping(msg.data.as_ptr(), buf_ptr as *mut u8, copy_len); }
+            }
+            copy_len as i64
+        },
+        Err(ipc::IpcError::PermissionDenied) => -1,
+        Err(ipc::IpcError::InvalidEndpoint) => -9,
+        Err(ipc::IpcError::TooManyWaiters) => -11,
+        Err(_) => -1,
     }
 }
 
